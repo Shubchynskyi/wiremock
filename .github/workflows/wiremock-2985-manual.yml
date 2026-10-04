@@ -1,0 +1,82 @@
+name: WireMock 2985 manual verification
+run-name: WireMock 2985 - ${{ inputs.target }} - ${{ inputs.tasks }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Platform and Java version
+        type: choice
+        default: all
+        options:
+          - all
+          - linux-jdk17
+          - windows-jdk17
+          - macos-jdk17
+          - windows-jdk21
+      tasks:
+        description: Gradle tasks; select only failed tasks for a retry
+        type: string
+        default: 'check :wiremock-standalone:shadowJar'
+      test_filters:
+        description: Comma-separated failed test classes; blank for all tests
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: ${{ github.repository == 'Shubchynskyi/wiremock' && !github.event.repository.private }}
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: >-
+          ${{ fromJSON(
+            inputs.target == 'all' && '[{"os":"ubuntu-latest","jdk":"17","target":"linux-jdk17"},{"os":"windows-latest","jdk":"17","target":"windows-jdk17"},{"os":"macos-latest","jdk":"17","target":"macos-jdk17"},{"os":"windows-latest","jdk":"21","target":"windows-jdk21"}]' ||
+            inputs.target == 'linux-jdk17' && '[{"os":"ubuntu-latest","jdk":"17","target":"linux-jdk17"}]' ||
+            inputs.target == 'windows-jdk17' && '[{"os":"windows-latest","jdk":"17","target":"windows-jdk17"}]' ||
+            inputs.target == 'macos-jdk17' && '[{"os":"macos-latest","jdk":"17","target":"macos-jdk17"}]' ||
+            '[{"os":"windows-latest","jdk":"21","target":"windows-jdk21"}]'
+          ) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CI: 'true'
+      JDK_VERSION: ${{ matrix.jdk }}
+      WIREMOCK_GRADLE_TASKS: ${{ inputs.tasks }}
+      WIREMOCK_TEST_FILTERS: ${{ inputs.test_filters }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record checked commit and environment
+        run: |
+          git rev-parse HEAD
+          Write-Output "Runner: $env:RUNNER_OS / $env:RUNNER_ARCH"
+          if ($IsWindows) {
+            netsh interface ipv4 show excludedportrange protocol=tcp
+            netsh interface ipv6 show excludedportrange protocol=tcp
+          }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: true
+          cache-disabled: true
+      - name: Run selected Gradle checks
+        run: ./.github/scripts/wiremock-2985-gradle.ps1
+      - name: Verify standalone HTTPS with conflicting resources
+        if: ${{ success() && contains(inputs.tasks, ':wiremock-standalone:shadowJar') }}
+        run: ./.github/scripts/wiremock-2985-standalone.ps1
+      - name: Print JUnit results
+        if: always()
+        run: ./.github/scripts/wiremock-2985-results.ps1
